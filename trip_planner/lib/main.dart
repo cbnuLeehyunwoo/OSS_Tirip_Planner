@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:trip_planner/services/prompt_service.dart';
 
 void main() {
   runApp(const TravelApp());
@@ -50,6 +51,39 @@ class TravelHomePage extends StatelessWidget {
             },
           ),
         ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          // 가상 데이터 생성
+          final tripInfo = TripInfo(
+            destination: '청주',
+            numberOfPeople: 2,
+            startDate: DateTime.now(),
+            endDate: DateTime.now().add(const Duration(days: 2)),
+          );
+
+          final places = [
+            Place(name: '청주 상당산성', latitude: 36.6494, longitude: 127.5491, type: '관광지', isOpen: true),
+            Place(name: '국립청주박물관', latitude: 36.6402, longitude: 127.5095, type: '관광지', isOpen: false),
+            Place(name: '청남대', latitude: 36.5550, longitude: 127.4800, type: '관광지', isOpen: true),
+            Place(name: '성안길', latitude: 36.6352, longitude: 127.4891, type: '관광지'),
+            Place(name: '고드미', latitude: 36.6445, longitude: 127.5152, type: '맛집'),
+            Place(name: '파블로', latitude: 36.6389, longitude: 127.4882, type: '맛집'),
+            Place(name: '호텔 뮤제오', latitude: 36.6333, longitude: 127.4590, type: '숙소'),
+          ];
+
+          // 프롬프트 생성
+          final prompt = PromptService.generateTripPrompt(
+            tripInfo: tripInfo,
+            places: places,
+          );
+
+          // 생성된 프롬프트 출력
+          print('--- Generated Prompt ---');
+          print(prompt);
+          print('----------------------');
+        },
+        child: const Icon(Icons.receipt_long),
       ),
       body: SingleChildScrollView(
         // 스크롤 가능한 화면을 위해 SingleChildScrollView를 사용합니다.
