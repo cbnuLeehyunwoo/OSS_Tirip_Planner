@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:trip_planner/services/prompt_service.dart';
 import 'TextEdit/travel_home_page.dart'; 
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
