@@ -1,4 +1,6 @@
 venv/
 
 #Firebase service account key
-serviceAccountKey.json
+trip_backend/serviceAccountKey.json
+.vscode/
+trip_backend/__pycache__/
