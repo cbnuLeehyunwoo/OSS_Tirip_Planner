@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 // 메시지를 보낸 주체를 구분하기 위한 열거형(enum)
 enum ChatAuthor { bot, user }
@@ -172,7 +173,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
   
   Future<Map<String, dynamic>> _fetchScheduleFromAI() async {
-    const String baseUrl = 'http'; 
+    final String baseUrl = dotenv.env['API_BASE_URL'] ?? ''; 
     final url = Uri.parse('$baseUrl/generate-schedule');
     final requestBody = {
       'destination': widget.searchQuery,

@@ -24,3 +24,41 @@ def create_travel_prompt(destination, trip_period, num_people, theme, additional
     
     # 불필요한 공백을 제거하여 모델에 더 깔끔한 입력을 제공
     return "\n".join([line.strip() for line in prompt.strip().split('\n')])
+
+
+def create_gemma_prompt_for_day(current_date_str, total_trip_info, is_first_day):
+    """Gemma 모델에게 하루치 일정을 JSON 형식으로 요청하는 프롬프트를 생성합니다."""
+
+    first_day_instruction = ""
+    if is_first_day:
+        first_day_instruction = f"This is the first day of the trip. The first event MUST be the travel from '{total_trip_info['start_location']}' to the destination. "
+
+    prompt = f"""
+    You are a helpful travel planning assistant.
+    Your goal is to suggest 2 to 4 key activities for a single day: {current_date_str}.
+
+    **Trip Information:**
+    - Destination: {total_trip_info['destination']}
+    - Travel Theme: {total_trip_info['theme'] if total_trip_info['theme'] else 'Any'}
+    {first_day_instruction}
+
+    Please provide your suggestions as a valid JSON list, where each item is an object with "date", "time", and "title" keys.
+    The date for all items must be "{current_date_str}".
+
+    Example of a valid JSON response:
+    ```json
+    [
+      {{
+        "date": "{current_date_str}",
+        "time": "10:30",
+        "title": "Visit a famous local landmark"
+      }},
+      {{
+        "date": "{current_date_str}",
+        "time": "19:00",
+        "title": "Enjoy the city's night view"
+      }}
+    ]
+    ```
+    """
+    return prompt
