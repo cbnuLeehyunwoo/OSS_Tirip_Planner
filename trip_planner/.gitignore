@@ -44,5 +44,18 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# Linux generated files
+/linux/flutter/generated_*.h
+/linux/flutter/generated_*.cc
+/linux/flutter/generated_plugins.cmake
+
+# Windows generated files
+/windows/flutter/generated_*.h
+/windows/flutter/generated_*.cc
+/windows/flutter/generated_plugins.cmake
+
+# macOS generated files
+/macos/Flutter/GeneratedPluginRegistrant.swift
+
 # Secrets and local configurations
 .env
