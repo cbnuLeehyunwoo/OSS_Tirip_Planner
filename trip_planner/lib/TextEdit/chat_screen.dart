@@ -3,6 +3,8 @@ import 'package:intl/intl.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 // 메시지를 보낸 주체를 구분하기 위한 열거형(enum)
 enum ChatAuthor { bot, user }
@@ -135,64 +137,88 @@ class _ChatScreenState extends State<ChatScreen> {
     Future.delayed(const Duration(milliseconds: 800), _generateSchedule);
   }
 
-  // 3단계: 일정 생성 및 결과 출력
+  // 3단계: 일정 생성 및 결과 출력 (Firestore 연동 방식)
   void _generateSchedule() async {
+    // --- 추가된 부분 시작 ---
+    // 데이터를 생성하기 전에 날짜와 사용자 정보가 유효한지 확인합니다.
+    if (_selectedDateRange == null) {
+      _addBotMessage('오류: 날짜가 선택되지 않았습니다. 다시 시도해 주세요.');
+      return; // 함수 종료
+    }
+    if (FirebaseAuth.instance.currentUser == null) {
+      _addBotMessage('오류: 사용자 인증 정보를 찾을 수 없습니다. 앱을 재시작해 주세요.');
+      return; // 함수 종료
+    }
+    // --- 추가된 부분 끝 ---
+
     _addBotMessage('알겠습니다! AI가 멋진 여행 계획을 만들고 있어요. 잠시만 기다려주세요...');
 
     try {
-      final scheduleResult = await _fetchScheduleFromAI();
+      // 1. Firestore에 데이터 기록하고 작업이 끝날 때까지 기다립니다.
+      DocumentReference tripDocRef = await FirebaseFirestore.instance.collection('trips').add({
+        'destination': widget.searchQuery,
+        'startDate': DateFormat('yyyy-MM-dd').format(_selectedDateRange!.start),
+        'endDate': DateFormat('yyyy-MM-dd').format(_selectedDateRange!.end),
+        'theme': _selectedTheme,
+        'status': 'processing', // 초기 상태: 처리 중
+        'createdAt': FieldValue.serverTimestamp(), // 생성 시간 기록
+        'userId': FirebaseAuth.instance.currentUser!.uid, // 사용자 ID 기록
+      });
 
-      // 서버에서 받은 데이터에서 '핵심 일정'과 '전체 일정'을 분리합니다.
-      final List<dynamic> keyEvents = scheduleResult['key_events'] ?? [];
-      final List<dynamic> fullSchedule = scheduleResult['full_schedule'] ?? [];
+      // 2. DB 기록이 성공하면, 생성된 문서의 ID를 가져옵니다.
+      String tripId = tripDocRef.id;
 
-      if (keyEvents.isNotEmpty) {
-        // '핵심 일정'을 표시할 위젯을 생성합니다.
-        final scheduleWidget = _buildScheduleDisplayWidget(
-          keyEvents.map((item) => Map<String, String>.from(item)).toList()
-        );
+      // 3. 그 후에 백엔드 API를 호출하여 일정 생성을 "요청"합니다.
+      final String baseUrl = dotenv.env['API_BASE_URL'] ?? '';
+      await http.post(
+        Uri.parse('$baseUrl/generate-schedule-from-db'), // 새로운 엔드포인트
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'tripId': tripId}),
+      );
 
-        // 생성된 위젯을 채팅 메시지에 담아 표시합니다.
-        _addBotMessage(
-          'AI 추천 핵심 일정이 생성되었어요! 전체 상세 일정은 데이터로 저장되었습니다.',
-          actionWidget: scheduleWidget
-        );
+      // 4. Firestore 문서의 변경사항을 수신 대기하여 결과를 받습니다.
+      _listenForSchedule(tripId);
 
-        print('--- AI로부터 받은 전체 상세 일정 (${fullSchedule.length}개) ---');
-        // print(fullSchedule); // 너무 길어서 주석 처리, 필요시 활성화
-        print('------------------------------------');
-        
-      } else {
-        _addBotMessage('죄송합니다. 일정을 생성하는 데 실패했어요. 다시 시도해 주세요.');
-      }
     } catch (e) {
-      print('--- API 호출 오류 ---');
+      print('--- 일정 생성 시작 오류 ---');
       print(e);
-      _addBotMessage('죄송합니다. 서버에 문제가 발생했어요. 잠시 후 다시 시도해 주세요.');
+      _addBotMessage('죄송합니다. 일정 생성 요청에 실패했어요. 다시 시도해 주세요.');
     }
   }
-  
-  Future<Map<String, dynamic>> _fetchScheduleFromAI() async {
-    final String baseUrl = dotenv.env['API_BASE_URL'] ?? ''; 
-    final url = Uri.parse('$baseUrl/generate-schedule');
-    final requestBody = {
-      'destination': widget.searchQuery,
-      'startDate': DateFormat('yyyy-MM-dd').format(_selectedDateRange!.start),
-      'endDate': DateFormat('yyyy-MM-dd').format(_selectedDateRange!.end),
-      'theme': _selectedTheme,
-    };
 
-    final response = await http.post(
-      url,
-      headers: {'Content-Type': 'application/json; charset=UTF-8'},
-      body: jsonEncode(requestBody),
-    );
+  // Firestore 문서 변경을 수신 대기하는 함수
+  void _listenForSchedule(String tripId) {
+    FirebaseFirestore.instance.collection('trips').doc(tripId).snapshots().listen((snapshot) {
+      if (snapshot.exists) {
+        final data = snapshot.data()!;
+        final status = data['status'];
 
-    if (response.statusCode == 200) {
-      return jsonDecode(utf8.decode(response.bodyBytes));
-    } else {
-      throw Exception('서버로부터 데이터를 불러오는 데 실패했습니다. 상태 코드: ${response.statusCode}');
-    }
+        // 백엔드가 성공적으로 일정을 생성하고 DB를 업데이트했을 때
+        if (status == 'completed') {
+          final List<dynamic> keyEvents = data['key_events'] ?? [];
+          if (keyEvents.isNotEmpty) {
+            final scheduleWidget = _buildScheduleDisplayWidget(
+              keyEvents.map((item) => Map<String, String>.from(item)).toList()
+            );
+            _addBotMessage(
+              'AI 추천 핵심 일정이 생성되었어요!',
+              actionWidget: scheduleWidget
+            );
+          } else {
+            _addBotMessage('죄송합니다. 일정을 생성했지만, 추천 장소가 없네요.');
+          }
+        } 
+        // 백엔드에서 처리 중 오류가 발생했을 때
+        else if (status == 'error') {
+          _addBotMessage('죄송합니다. 서버에서 일정 생성 중 오류가 발생했어요.');
+        }
+        // status가 'processing'이거나 다른 상태일 때는 아무것도 하지 않고 계속 기다림
+      }
+    }).onError((error) {
+      print("--- Firestore 수신 대기 오류 ---");
+      print(error);
+      _addBotMessage('결과를 받아오는 중 문제가 발생했습니다.');
+    });
   }
 
   // 3. 핵심 일정을 표시할 UI 위젯을 생성하는 함수
