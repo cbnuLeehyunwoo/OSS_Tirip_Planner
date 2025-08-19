@@ -84,6 +84,8 @@ def generate_schedule_from_db():
     try:
         data = request.json
         trip_id = data.get('tripId')
+        contingency = data.get('contingency') # 돌발 상황 (일정 수정 시에만 존재)
+
         if not trip_id:
             return jsonify({"error": "tripId가 누락되었습니다."}), 400
 
@@ -97,28 +99,56 @@ def generate_schedule_from_db():
         start_date_str = trip_data.get('startDate')
         end_date_str = trip_data.get('endDate')
         theme = trip_data.get('theme')
-
-        total_trip_info = {
-            "start_location": "충청북도 청주",
-            "destination": destination,
-            "start_date": start_date_str,
-            "end_date": end_date_str,
-            "theme": theme
-        }
-
         all_key_events = []
-        current_date = datetime.strptime(start_date_str, '%Y-%m-%d')
-        end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
-        is_first_day = True
 
-        while current_date <= end_date:
-            current_date_str = current_date.strftime('%Y-%m-%d')
-            print(f"*** {current_date_str}의 일정을 생성합니다... ***")
-            daily_events = get_key_events_for_one_day(current_date_str, is_first_day, total_trip_info)
-            all_key_events.extend(daily_events)
-            is_first_day = False
-            current_date += timedelta(days=1)
+        # --- 분기 로직: 돌발 상황이 있으면 일정 수정, 없으면 최초 생성 ---
+        if contingency:
+            print(f"*** 일정 수정 요청 수신: {contingency} ***")
+            existing_schedule = trip_data.get('key_events', [])
+            prompt = f"""You are an adaptive travel planner AI. A user's original travel plan needs to be modified due to an unexpected situation.
+
+            **Original Trip Details:**
+            - Destination: {destination}
+            - Theme: {theme if theme else 'Flexible'}
+
+            **Unexpected Situation:**
+            - {contingency}
+
+            **Existing Key Activities:**
+            - {json.dumps(existing_schedule, ensure_ascii=False, indent=2)}
+
+            **Task:**
+            Modify the "Existing Key Activities" to suit the "Unexpected Situation". For example, if it's raining, change outdoor activities to indoor ones. The output MUST BE a new, revised list of key activities in the exact same JSON format as the input.
+            """
+            message = [{"role": "user", "content": prompt}]
+            inputs = tokenizer.apply_chat_template(message, return_tensors="pt").to(model.device)
+            outputs = model.generate(inputs, max_new_tokens=2048)
+            model_response_text = tokenizer.decode(outputs[0][len(inputs[0]):], skip_special_tokens=True)
+            print(f"--- Gemma 수정 제안 ---\n{model_response_text}\n--------------------")
+            json_match = re.search(r'\[.*\]', model_response_text, re.DOTALL)
+            if json_match:
+                all_key_events = json.loads(json_match.group(0))
+        else:
+            # --- 최초 일정 생성 로직 ---
+            total_trip_info = {
+                "start_location": "충청북도 청주",
+                "destination": destination,
+                "start_date": start_date_str,
+                "end_date": end_date_str,
+                "theme": theme
+            }
+            current_date = datetime.strptime(start_date_str, '%Y-%m-%d')
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
+            is_first_day = True
+            while current_date <= end_date:
+                current_date_str = current_date.strftime('%Y-%m-%d')
+                print(f"*** {current_date_str}의 일정을 생성합니다... ***")
+                daily_events = get_key_events_for_one_day(current_date_str, is_first_day, total_trip_info)
+                all_key_events.extend(daily_events)
+                is_first_day = False
+                current_date += timedelta(days=1)
         
+        # --- 공통 로직: 최종 일정 생성 및 DB 업데이트 ---
         final_full_schedule = fill_in_full_schedule(all_key_events, start_date_str, end_date_str)
         
         trip_ref.update({
@@ -127,8 +157,8 @@ def generate_schedule_from_db():
             'status': 'completed'
         })
         
-        print(f"--- {trip_id}의 전체 일정 생성 및 DB 업데이트 완료 ---")
-        return jsonify({"success": True, "message": "일정 생성 및 저장이 완료되었습니다."} ), 200
+        print(f"--- {trip_id}의 전체 일정 생성/수정 및 DB 업데이트 완료 ---")
+        return jsonify({"success": True}), 200
 
     except Exception as e:
         print(f"API 처리 중 오류 발생: {e}")
