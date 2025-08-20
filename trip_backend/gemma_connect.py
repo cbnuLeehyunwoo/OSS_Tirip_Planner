@@ -12,14 +12,14 @@ from datetime import datetime, timedelta
 
 # --- 모듈화된 파일들 import ---
 from firebase_config import db
-from prompt_utils import create_gemma_prompt_for_day
+from prompt_utils import create_gemma_prompt_for_day, create_gemma_prompt_for_reschedule
 
 load_dotenv()
 
 # --- 모델 로딩 ---
 print("모델을 로딩하는 중입니다...")
 try:
-    model_id = "google/gemma-2-9b-it"
+    model_id = "google/gemma-2-9b-it" # 사용자가 원한 기존 모델 ID 유지
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     model = AutoModelForCausalLM.from_pretrained(
         model_id, torch_dtype=torch.bfloat16, device_map="auto"
@@ -58,11 +58,24 @@ def fill_in_full_schedule(key_events, start_date_str, end_date_str):
 
 def get_key_events_for_one_day(current_date_str, is_first_day, total_trip_info):
     """지정된 단 하루의 핵심 일정을 AI에게 요청하는 함수"""
-    prompt = create_gemma_prompt_for_day(current_date_str, total_trip_info, is_first_day)
-    message = [{"role": "user", "content": prompt}]
-    inputs = tokenizer.apply_chat_template(message, return_tensors="pt").to(model.device)
-    outputs = model.generate(inputs, max_new_tokens=512)
-    model_response_text = tokenizer.decode(outputs[0][len(inputs[0]):], skip_special_tokens=True)
+    model_response_text = ""
+    try:
+        prompt = create_gemma_prompt_for_day(current_date_str, total_trip_info, is_first_day)
+        message = [{"role": "user", "content": prompt}]
+        
+        print(f"--- 모델 입력을 위해 토크나이저를 적용합니다... ---")
+        inputs = tokenizer.apply_chat_template(message, return_tensors="pt").to(model.device)
+        print(f"--- 모델 생성을 시작합니다... ---")
+        outputs = model.generate(inputs, max_new_tokens=512)
+        print(f"--- 모델 생성이 완료되었습니다. 디코딩을 시작합니다... ---")
+        model_response_text = tokenizer.decode(outputs[0][len(inputs[0]):], skip_special_tokens=True)
+        print(f"--- 디코딩이 완료되었습니다. ---")
+
+    except Exception as e:
+        print(f"!!!!!!!! 모델 생성 또는 처리 중 심각한 오류 발생 !!!!!!!!")
+        print(f"오류 타입: {type(e).__name__}")
+        print(f"오류 메시지: {e}")
+        return []
 
     print(f"--- Gemma 응답 ({current_date_str}) ---\n{model_response_text}\n--------------------")
 
@@ -76,6 +89,7 @@ def get_key_events_for_one_day(current_date_str, is_first_day, total_trip_info):
             return []
     return []
 
+
 # --- API 엔드포인트 ---
 @app.route('/generate-schedule-from-db', methods=['POST'])
 def generate_schedule_from_db():
@@ -87,7 +101,7 @@ def generate_schedule_from_db():
         contingency = data.get('contingency') # 돌발 상황 (일정 수정 시에만 존재)
 
         if not trip_id:
-            return jsonify({"error": "tripId가 누락되었습니다."}), 400
+            return jsonify({"error": "tripId가 누락되었습니다."} ), 400
 
         trip_ref = db.collection('trips').document(trip_id)
         trip_data = trip_ref.get().to_dict()
@@ -105,21 +119,9 @@ def generate_schedule_from_db():
         if contingency:
             print(f"*** 일정 수정 요청 수신: {contingency} ***")
             existing_schedule = trip_data.get('key_events', [])
-            prompt = f"""You are an adaptive travel planner AI. A user's original travel plan needs to be modified due to an unexpected situation.
-
-            **Original Trip Details:**
-            - Destination: {destination}
-            - Theme: {theme if theme else 'Flexible'}
-
-            **Unexpected Situation:**
-            - {contingency}
-
-            **Existing Key Activities:**
-            - {json.dumps(existing_schedule, ensure_ascii=False, indent=2)}
-
-            **Task:**
-            Modify the "Existing Key Activities" to suit the "Unexpected Situation". For example, if it's raining, change outdoor activities to indoor ones. The output MUST BE a new, revised list of key activities in the exact same JSON format as the input.
-            """
+            # prompt_utils에 있는 재조정 프롬프트 생성 함수를 사용합니다.
+            prompt = create_gemma_prompt_for_reschedule(destination, theme, contingency, existing_schedule)
+            
             message = [{"role": "user", "content": prompt}]
             inputs = tokenizer.apply_chat_template(message, return_tensors="pt").to(model.device)
             outputs = model.generate(inputs, max_new_tokens=2048)

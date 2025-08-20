@@ -275,7 +275,7 @@ class _ChatScreenState extends State<ChatScreen> {
           final eventTime = DateFormat('yyyy-MM-dd HH:mm').parse('${event["date"]} ${event["time"]}');
           for (var forecast in forecastData) {
             final forecastTime = DateTime.fromMillisecondsSinceEpoch(forecast['dt'] * 1000);
-            if (forecastTime.isAfter(eventTime.subtract(const Duration(hours: 2)))) &&
+            if (forecastTime.isAfter(eventTime.subtract(const Duration(hours: 2))) &&
                 forecastTime.isBefore(eventTime.add(const Duration(hours: 2)))) {
               final weatherCondition = forecast['weather'][0]['main'].toString().toLowerCase();
               if (weatherCondition == 'rain' || weatherCondition == 'drizzle' || weatherCondition == 'thunderstorm') {

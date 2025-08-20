@@ -1,4 +1,5 @@
 # trip_backend/prompt_utils.py
+import json
 
 def create_travel_prompt(destination, trip_period, num_people, theme, additional_request=""):
     """
@@ -27,38 +28,51 @@ def create_travel_prompt(destination, trip_period, num_people, theme, additional
 
 
 def create_gemma_prompt_for_day(current_date_str, total_trip_info, is_first_day):
-    """Gemma 모델에게 하루치 일정을 JSON 형식으로 요청하는 프롬프트를 생성합니다."""
+    """Gemma-2 모델에 맞게 수정된, 하루치 일정을 요청하는 프롬프트를 생성합니다."""
 
     first_day_instruction = ""
     if is_first_day:
-        first_day_instruction = f"This is the first day of the trip. The first event MUST be the travel from '{total_trip_info['start_location']}' to the destination. "
+        first_day_instruction = f"- Note: This is the first day. The first event must be traveling from '{total_trip_info['start_location']}' to the destination."
 
+    # Gemma-2 모델을 위해 더 간단하고 명확하게 수정된 프롬프트
     prompt = f"""
-    You are a helpful travel planning assistant.
-    Your goal is to suggest 2 to 4 key activities for a single day: {current_date_str}.
+    **Task: Create a travel schedule for one day.**
 
-    **Trip Information:**
+    **Input:**
+    - Day: {current_date_str}
     - Destination: {total_trip_info['destination']}
-    - Travel Theme: {total_trip_info['theme'] if total_trip_info['theme'] else 'Any'}
+    - Theme: {total_trip_info['theme'] if total_trip_info['theme'] else 'Any'}
     {first_day_instruction}
 
-    Please provide your suggestions as a valid JSON list, where each item is an object with "date", "time", and "title" keys.
-    The date for all items must be "{current_date_str}".
+    **Instructions:**
+    1. Suggest 2 to 4 diverse and interesting activities for the given day.
+    2. Your entire response must be a single, valid JSON list of objects.
+    3. Each object must contain three keys: "date" (string), "time" (string in HH:MM format), and "title" (string).
+    4. The value for the "date" key for all objects must be "{current_date_str}".
 
-    Example of a valid JSON response:
-    ```json
-    [
-      {{
-        "date": "{current_date_str}",
-        "time": "10:30",
-        "title": "Visit a famous local landmark"
-      }},
-      {{
-        "date": "{current_date_str}",
-        "time": "19:00",
-        "title": "Enjoy the city's night view"
-      }}
-    ]
-    ```
+    **JSON Response:**
+    """
+    return prompt
+
+def create_gemma_prompt_for_reschedule(destination, theme, contingency, existing_schedule):
+    """돌발 상황에 맞춰 기존 일정을 수정하도록 요청하는 프롬프트를 생성합니다."""
+    
+    prompt = f"""
+    You are an adaptive travel planner AI. A user's original travel plan needs to be modified due to an unexpected situation.
+
+    **Original Trip Details:**
+    - Destination: {destination}
+    - Theme: {theme if theme else 'Flexible'}
+
+    **Unexpected Situation:**
+    - {contingency} (e.g., "It's raining", "Overslept", "Feeling unwell")
+
+    **Existing Key Activities:**
+    - {json.dumps(existing_schedule, ensure_ascii=False, indent=2)}
+
+    **Task:**
+    Modify the "Existing Key Activities" to suit the "Unexpected Situation".
+    For example, if it's raining, change outdoor activities to indoor ones (like museums, indoor cafes, shopping malls). If the user overslept, adjust the morning schedule.
+    The output MUST BE a new, revised list of key activities in the exact same JSON format as the input.
     """
     return prompt
