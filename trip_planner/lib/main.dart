@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
-import 'TextEdit/travel_home_page.dart'; 
+import 'Chat/travel_home_page.dart'; 
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:intl/date_symbol_data_local.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await initializeDateFormatting();
   await dotenv.load(fileName: ".env");
 
   runApp(const TravelApp());

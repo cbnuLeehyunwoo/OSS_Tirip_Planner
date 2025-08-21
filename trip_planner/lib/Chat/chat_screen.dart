@@ -19,7 +19,12 @@ class ChatMessage {
 
 class ChatScreen extends StatefulWidget {
   final String searchQuery;
-  const ChatScreen({super.key, required this.searchQuery});
+  final String startLocation;
+  const ChatScreen({
+    super.key, 
+    required this.searchQuery,
+    required this.startLocation,
+    });
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -175,23 +180,34 @@ class _ChatScreenState extends State<ChatScreen> {
     final List<dynamic> keyEventsData = scheduleResult['key_events'] ?? [];
     final List<dynamic> fullScheduleData = scheduleResult['full_schedule'] ?? [];
 
-    if (keyEventsData.isNotEmpty) {
-      setState(() {
-        _keyEvents = keyEventsData.map((item) => Map<String, String>.from(item)).toList();
-        _fullSchedule = fullScheduleData.map((item) => Map<String, String>.from(item)).toList();
-      });
+    if (fullScheduleData.isNotEmpty) {
+    
+    // 3. 데이터를 Dart 타입으로 변환합니다.
+    final newKeyEvents = keyEventsData.map((item) => Map<String, String>.from(item)).toList();
+    final newFullSchedule = fullScheduleData.map((item) => Map<String, String>.from(item)).toList();
+    
+    final scheduleWidget = _buildScheduleDisplayWidget(
+      newKeyEvents.isNotEmpty ? newKeyEvents : newFullSchedule.take(5).toList()
+    );
 
-      final scheduleWidget = _buildScheduleDisplayWidget(_keyEvents);
-      _addBotMessage(
-        '새로운 추천 일정이 도착했어요! 궁금한 점이나 변경하고 싶은 점이 있다면 아래에 입력해주세요.',
-        actionWidget: scheduleWidget
-      );
+    setState(() {
+      // 5. 새로운 일정으로 상태를 업데이트합니다 (기억 갱신).
+      _keyEvents = newKeyEvents;
+      _fullSchedule = newFullSchedule;
+    });
+    
+    // 6. 봇 메시지를 추가합니다.
+    _addBotMessage(
+      '새로운 추천 일정이 도착했어요! 궁금한 점이나 변경하고 싶은 점이 있다면 아래에 입력해주세요.',
+      actionWidget: scheduleWidget
+    );
 
-      // 4. 일정이 처음 생성되거나 성공적으로 수정되면, 날씨 확인 타이머를 시작/재시작
-      await _getCoordinatesAndStartWeatherTimer();
+    // 7. 날씨 타이머를 시작/재시작합니다.
+    await _getCoordinatesAndStartWeatherTimer();
 
     } else {
-      _addBotMessage('죄송합니다. 일정을 생성하는 데 실패했어요. 다시 시도해 주세요.');
+    // 서버로부터 full_schedule 조차 받지 못한 경우 (진짜 실패)
+    _addBotMessage('죄송합니다. 일정을 생성하는 데 실패했어요. 다시 시도해 주세요.');
     }
   }
 
@@ -206,18 +222,27 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<Map<String, dynamic>> _fetchScheduleFromAI({String? contingency, List<Map<String, String>>? existingSchedule}) async { 
     final baseUrl = dotenv.env['BASE_URL'] ?? 'http://localhost:5000';
     final url = Uri.parse('$baseUrl/generate-schedule');
-    final requestBody = {
+    final Map<String, dynamic> requestBody = {
+      'start_location' : widget.startLocation,
       'destination': widget.searchQuery,
       'startDate': DateFormat('yyyy-MM-dd').format(_selectedDateRange!.start),
       'endDate': DateFormat('yyyy-MM-dd').format(_selectedDateRange!.end),
       'theme': _selectedTheme,
     };
 
+    if (contingency != null && existingSchedule != null) {
+    requestBody['contingency'] = contingency;
+    requestBody['existing_key_events'] = existingSchedule;
+    }
+
     final response = await http.post(
       url,
       headers: {'Content-Type': 'application/json; charset=UTF-8'},
       body: jsonEncode(requestBody),
     );
+
+    print('✅ 서버로부터 받은 응답 코드: ${response.statusCode}');
+    print('📦 서버로부터 받은 내용: ${utf8.decode(response.bodyBytes)}');
 
     if (response.statusCode == 200) {
       return jsonDecode(utf8.decode(response.bodyBytes));
@@ -259,7 +284,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
   
-  // --- 💬 사용자 직접 입력 처리 ---
+  // --- 돌발 상황 처리 로직 ---
   void _handleUserSubmit(String text) {
     if (text.trim().isEmpty) return;
 
@@ -368,6 +393,19 @@ class _ChatScreenState extends State<ChatScreen> {
         backgroundColor: Colors.white,
         foregroundColor: Colors.black,
         elevation: 1,
+        actions: [
+          if (_fullSchedule.isNotEmpty)
+          IconButton(
+            icon: const Icon(Icons.check_circle_outline),
+            tooltip: '이 일정으로 확정하기',
+            onPressed: () {
+              Navigator.pop(context, {
+                "key_events": _keyEvents,
+                "full_schedule": _fullSchedule
+              });
+            },
+          )
+        ],
       ),
       body: Column(
         children: [
