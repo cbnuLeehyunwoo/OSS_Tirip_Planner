@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../tour_api/tour_api.dart';
 
 enum ChatAuthor { bot, user }
 
@@ -26,18 +27,15 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
-  // --- 상태 변수 ---
   final ScrollController _scrollController = ScrollController();
   final TextEditingController _textController = TextEditingController();
   final List<ChatMessage> _messages = [];
 
   DateTimeRange? _selectedDateRange;
   String? _selectedTheme;
-  String? _tripId; // 생성된 여행 문서의 ID를 저장
-
+  String? _tripId;
   List<Map<String, String>> _keyEvents = [];
 
-  // --- 날씨 기능 관련 변수 ---
   Timer? _weatherTimer;
   double? _lat;
   double? _lon;
@@ -57,7 +55,6 @@ class _ChatScreenState extends State<ChatScreen> {
     super.dispose();
   }
 
-  // --- 대화 흐름 관리 ---
   void _startConversation() {
     _addBotMessage('안녕하세요! ${widget.searchQuery} 여행 계획을 도와드릴게요.');
     Future.delayed(const Duration(milliseconds: 1200), _askForDate);
@@ -70,11 +67,6 @@ class _ChatScreenState extends State<ChatScreen> {
         icon: const Icon(Icons.calendar_today),
         label: const Text('날짜 선택하기'),
         onPressed: _showDatePicker,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.blueAccent,
-          foregroundColor: Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ),
       ),
     );
   }
@@ -84,7 +76,6 @@ class _ChatScreenState extends State<ChatScreen> {
       context: context,
       firstDate: DateTime.now(),
       lastDate: DateTime.now().add(const Duration(days: 365)),
-      helpText: '여행 시작일과 종료일을 선택하세요',
     );
     if (picked != null) {
       _selectedDateRange = picked;
@@ -111,46 +102,35 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Widget _buildThemeButton(String theme) {
-    return ElevatedButton(
-      onPressed: () => _onThemeSelected(theme),
-      child: Text(theme),
-      style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.white,
-          foregroundColor: Colors.blueAccent,
-          side: const BorderSide(color: Colors.blueAccent),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-    );
-  }
-
   void _onThemeSelected(String theme) {
     _selectedTheme = (theme == '건너뛰기') ? null : theme;
     _addUserMessage(theme);
-    Future.delayed(const Duration(milliseconds: 800), _generateSchedule);
+    Future.delayed(const Duration(milliseconds: 800), _fetchPlacesAndGenerateSchedule);
   }
 
-  // --- 데이터 처리 및 API 호출 ---
-
-  // 최초 일정 생성
-  void _generateSchedule() async {
-    if (_selectedDateRange == null) {
-      _addBotMessage('오류: 날짜가 선택되지 않았습니다. 다시 시도해 주세요.');
-      return;
-    }
-    if (FirebaseAuth.instance.currentUser == null) {
-      _addBotMessage('오류: 사용자 인증 정보를 찾을 수 없습니다. 앱을 재시작해 주세요.');
-      return;
-    }
-
-    _addBotMessage('알겠습니다! AI가 멋진 여행 계획을 만들고 있어요. 잠시만 기다려주세요...');
-
+  Future<void> _fetchPlacesAndGenerateSchedule() async {
+    _addBotMessage('선택하신 지역의 실제 장소 정보를 가져오고 있어요...');
     try {
+      final placesData = await _fetchAndFormatPlaces();
+      if (placesData.values.every((list) => list.isEmpty)) {
+        _addBotMessage('죄송합니다. 선택하신 지역의 장소 정보를 가져오는 데 실패했어요.');
+        return;
+      }
+      _addBotMessage('장소 정보를 바탕으로 AI가 멋진 여행 계획을 만들고 있어요. 잠시만 기다려주세요...');
+
+      if (_selectedDateRange == null || FirebaseAuth.instance.currentUser == null) {
+        _handleAPIError('날짜 또는 사용자 정보가 없습니다.');
+        return;
+      }
+
       DocumentReference tripDocRef = await FirebaseFirestore.instance.collection('trips').add({
         'destination': widget.searchQuery,
         'startDate': DateFormat('yyyy-MM-dd').format(_selectedDateRange!.start),
         'endDate': DateFormat('yyyy-MM-dd').format(_selectedDateRange!.end),
         'theme': _selectedTheme,
+        'tourist_spots_data': placesData['tourist_spots'],
+        'restaurants_data': placesData['restaurants'],
+        'accommodations_data': placesData['accommodations'],
         'status': 'processing',
         'createdAt': FieldValue.serverTimestamp(),
         'userId': FirebaseAuth.instance.currentUser!.uid,
@@ -166,13 +146,108 @@ class _ChatScreenState extends State<ChatScreen> {
       );
 
       _listenForSchedule(_tripId!);
-
     } catch (e) {
       _handleAPIError(e);
     }
   }
 
-  // 일정 수정 (사용자 입력 또는 날씨 변화)
+  Future<Map<String, String>> _getAreaAndSigunguCode(String query) async {
+    print('Searching for area and sigungu codes for query: $query');
+    String areaCode = '1'; // Default to Seoul
+    String sigunguCode = '';
+
+    final areas = await getAreaCodes(); // Get all top-level areas
+    print('Top-level areas fetched: ${areas.map((a) => a['name']).toList()}');
+
+    // Try to find a direct match for areaCode (e.g., "서울", "경기도")
+    for (var area in areas) {
+      print('Checking top-level area: ${area['name']} (code: ${area['code']})');
+      if (area['name'] == query) {
+        areaCode = area['code'];
+        print('Direct match found for area: $query, areaCode: $areaCode');
+        return {'areaCode': areaCode, 'sigunguCode': sigunguCode};
+      }
+    }
+
+    // If not a direct areaCode match, try to find it as a sigungu within a province
+    for (var area in areas) {
+      print('Fetching sigungus for area: ${area['name']} (code: ${area['code']})');
+      final sigungus = await getAreaCodes(areaCode: area['code']);
+      print('Sigungus for ${area['name']}: ${sigungus.map((s) => s['name']).toList()}');
+      for (var sigungu in sigungus) {
+        print('Checking sigungu: ${sigungu['name']} (code: ${sigungu['code']}) within ${area['name']}');
+        if (sigungu['name'] == query) {
+          areaCode = area['code']; // This is the province's areaCode
+          sigunguCode = sigungu['code']; // This is the city's sigunguCode
+          print('Sigungu match found for query: $query, areaCode: $areaCode, sigunguCode: $sigunguCode');
+          return {'areaCode': areaCode, 'sigunguCode': sigunguCode};
+        }
+      }
+    }
+
+    print('No specific area/sigungu match found for $query. Defaulting to Seoul (areaCode: $areaCode, sigunguCode: $sigunguCode)');
+    return {'areaCode': areaCode, 'sigunguCode': sigunguCode}; // Return default if no match
+  }
+
+  Future<Map<String, List<String>>> _fetchAndFormatPlaces() async {
+    final codes = await _getAreaAndSigunguCode(widget.searchQuery);
+    final areaCode = codes['areaCode']!;
+    final sigunguCode = codes['sigunguCode']!;
+
+    final results = await Future.wait([
+      getTourData(areaCode, sigunguCode),
+      getRestaurantData(areaCode, sigunguCode),
+      getAccommodationData(areaCode, sigunguCode)
+    ]);
+
+    final Map<String, List<String>> formattedPlaces = {
+      'tourist_spots': [],
+      'restaurants': [],
+      'accommodations': [],
+    };
+
+    final List<dynamic> tourPlaces = results[0];
+    final List<dynamic> restaurantPlaces = results[1];
+    final List<dynamic> accommodationPlaces = results[2];
+
+    // 각 타입별로 상세 정보 조회 및 포맷팅
+    for (var place in tourPlaces) {
+      final formatted = await _formatPlaceDetail(place, '12');
+      if (formatted != null) formattedPlaces['tourist_spots']!.add(formatted);
+    }
+    for (var place in restaurantPlaces) {
+      final formatted = await _formatPlaceDetail(place, '39');
+      if (formatted != null) formattedPlaces['restaurants']!.add(formatted);
+    }
+    for (var place in accommodationPlaces) {
+      final formatted = await _formatPlaceDetail(place, '32');
+      if (formatted != null) formattedPlaces['accommodations']!.add(formatted);
+    }
+
+    return formattedPlaces;
+  }
+
+  Future<String?> _formatPlaceDetail(dynamic place, String typeId) async {
+    try {
+      final details = await getDetailData(place['contentid'], typeId);
+      if (details.isNotEmpty) {
+        final detail = details[0];
+        String hours = '정보 없음';
+        String restDate = '정보 없음';
+
+        switch (typeId) {
+          case '12': hours = detail['usetime'] ?? '정보 없음'; restDate = detail['restdate'] ?? '정보 없음'; break;
+          case '39': hours = detail['opentimefood'] ?? '정보 없음'; restDate = detail['restdatefood'] ?? '정보 없음'; break;
+          case '32': hours = '체크인: ${detail['checkintime'] ?? '-'}, 체크아웃: ${detail['checkouttime'] ?? '-'}'; restDate = '연중무휴'; break;
+        }
+        return "Name: ${place['title']}, Hours: $hours, Closed: $restDate";
+      }
+    } catch (e) {
+      print("장소[${place['title']}] 상세 정보 조회 실패: $e");
+    }
+    return null;
+  }
+
   void _regenerateSchedule({required String contingency}) async {
     if (_tripId == null) {
       _addBotMessage('오류: 수정할 기존 일정이 없습니다.');
@@ -186,13 +261,11 @@ class _ChatScreenState extends State<ChatScreen> {
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'tripId': _tripId, 'contingency': contingency}),
       );
-      // 기존 리스너가 DB 변경을 감지하여 자동으로 UI를 업데이트합니다.
     } catch (e) {
       _handleAPIError(e);
     }
   }
 
-  // Firestore 리스너
   void _listenForSchedule(String tripId) {
     FirebaseFirestore.instance.collection('trips').doc(tripId).snapshots().listen((snapshot) {
       if (snapshot.exists) {
@@ -210,9 +283,9 @@ class _ChatScreenState extends State<ChatScreen> {
               'AI 추천 일정이 도착했어요! 궁금한 점이나 변경사항을 입력해주세요.',
               actionWidget: scheduleWidget
             );
-            _getCoordinatesAndStartWeatherTimer(); // 일정이 생성되면 날씨 확인 시작
+            _getCoordinatesAndStartWeatherTimer();
           } else {
-            _addBotMessage('죄송합니다. 일정을 생성했지만, 추천 장소가 없네요.');
+            _addBotMessage('죄송합니다. AI가 추천 장소를 찾지 못했어요.');
           }
         } else if (status == 'error') {
           _addBotMessage('죄송합니다. 서버에서 일정 생성 중 오류가 발생했어요.');
@@ -228,12 +301,10 @@ class _ChatScreenState extends State<ChatScreen> {
     _addBotMessage('죄송합니다. 서버와 통신 중 문제가 발생했어요. 잠시 후 다시 시도해 주세요.');
   }
 
-  // --- 날씨 관련 기능 ---
   Future<void> _getCoordinatesAndStartWeatherTimer() async {
     _weatherTimer?.cancel();
     final apiKey = dotenv.env['OPENWEATHER_API_KEY'];
     if (apiKey == null) return;
-
     try {
       final geoUrl = Uri.parse('http://api.openweathermap.org/geo/1.0/direct?q=${widget.searchQuery}&limit=1&appid=$apiKey');
       final response = await http.get(geoUrl);
@@ -244,7 +315,6 @@ class _ChatScreenState extends State<ChatScreen> {
             _lat = data[0]['lat'];
             _lon = data[0]['lon'];
           });
-          print('좌표 획득 성공: lat=$_lat, lon=$_lon. 날씨 확인을 시작합니다.');
           _startWeatherCheckTimer();
         }
       }
@@ -254,19 +324,15 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _startWeatherCheckTimer() {
-    _weatherTimer = Timer.periodic(const Duration(minutes: 30), (timer) {
-      _checkForRain();
-    });
+    _weatherTimer = Timer.periodic(const Duration(minutes: 30), (timer) => _checkForRain());
     _checkForRain();
   }
   
   Future<void> _checkForRain() async {
     if (_isCheckingWeather || _lat == null || _lon == null || _keyEvents.isEmpty) return;
     setState(() { _isCheckingWeather = true; });
-
     final apiKey = dotenv.env['OPENWEATHER_API_KEY']!;
     final weatherUrl = Uri.parse('http://api.openweathermap.org/data/2.5/forecast?lat=$_lat&lon=$_lon&appid=$apiKey&units=metric');
-
     try {
       final response = await http.get(weatherUrl);
       if (response.statusCode == 200) {
@@ -275,8 +341,7 @@ class _ChatScreenState extends State<ChatScreen> {
           final eventTime = DateFormat('yyyy-MM-dd HH:mm').parse('${event["date"]} ${event["time"]}');
           for (var forecast in forecastData) {
             final forecastTime = DateTime.fromMillisecondsSinceEpoch(forecast['dt'] * 1000);
-            if (forecastTime.isAfter(eventTime.subtract(const Duration(hours: 2))) &&
-                forecastTime.isBefore(eventTime.add(const Duration(hours: 2)))) {
+            if (forecastTime.isAfter(eventTime.subtract(const Duration(hours: 2)))) {
               final weatherCondition = forecast['weather'][0]['main'].toString().toLowerCase();
               if (weatherCondition == 'rain' || weatherCondition == 'drizzle' || weatherCondition == 'thunderstorm') {
                 final contingency = '앗, "${event['title']}" 일정 시간에 비가 올 것 같아요! 실내 활동으로 바꾸는 게 좋겠어요.';
@@ -295,15 +360,11 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() { _isCheckingWeather = false; });
   }
 
-  // --- UI 위젯 빌더 ---
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text('${widget.searchQuery} 여행 계획'),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
-        elevation: 1,
       ),
       body: Column(
         children: [
@@ -325,7 +386,6 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _buildTextComposer() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
-      decoration: BoxDecoration(color: Theme.of(context).cardColor),
       child: Row(
         children: [
           Expanded(
@@ -353,7 +413,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Widget _buildScheduleDisplayWidget(List<Map<String, String>> schedule) {
     return Card(
-      elevation: 2.0,
       margin: const EdgeInsets.only(top: 8.0),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.0)),
       child: Padding(
@@ -443,6 +502,19 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildThemeButton(String theme) {
+    return ElevatedButton(
+      onPressed: () => _onThemeSelected(theme),
+      child: Text(theme),
+      style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.white,
+          foregroundColor: Colors.blueAccent,
+          side: const BorderSide(color: Colors.blueAccent),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }
