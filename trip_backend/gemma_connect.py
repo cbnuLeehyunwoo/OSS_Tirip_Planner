@@ -135,8 +135,8 @@ def generate_schedule_from_db():
                 current_date_str = current_date.strftime('%Y-%m-%d')
                 
                 # 샘플링 로직 제거: 전체 목록을 사용
-                available_spots = [p for p in tourist_spots if p.split(",")[0].replace("Name: ", "") not in used_tourist_spots]
-                available_restaurants = [p for p in restaurants if p.split(",")[0].replace("Name: ", "") not in used_restaurants]
+                available_spots = [p for p in tourist_spots if p['name'] not in used_tourist_spots]
+                available_restaurants = [p for p in restaurants if p['name'] not in used_restaurants]
 
                 print(f"*** {current_date_str}의 일정을 생성합니다. 사용 가능한 관광지: {len(available_spots)}, 식당: {len(available_restaurants)} ***")
                 
@@ -145,7 +145,8 @@ def generate_schedule_from_db():
                 for event in daily_events:
                     all_key_events.append(event)
                     title = event.get('title')
-                    is_spot = any(title in p for p in available_spots)
+                    # Check if the title matches the 'name' key in any available spot/restaurant
+                    is_spot = any(p['name'] == title for p in available_spots)
                     if is_spot:
                         used_tourist_spots.append(title)
                     else:

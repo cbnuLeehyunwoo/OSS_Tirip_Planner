@@ -189,7 +189,7 @@ class _ChatScreenState extends State<ChatScreen> {
     return {'areaCode': areaCode, 'sigunguCode': sigunguCode}; // Return default if no match
   }
 
-  Future<Map<String, List<String>>> _fetchAndFormatPlaces() async {
+  Future<Map<String, List<Map<String, dynamic>>>> _fetchAndFormatPlaces() async {
     final codes = await _getAreaAndSigunguCode(widget.searchQuery);
     final areaCode = codes['areaCode']!;
     final sigunguCode = codes['sigunguCode']!;
@@ -200,7 +200,7 @@ class _ChatScreenState extends State<ChatScreen> {
       getAccommodationData(areaCode, sigunguCode)
     ]);
 
-    final Map<String, List<String>> formattedPlaces = {
+    final Map<String, List<Map<String, dynamic>>> formattedPlaces = {
       'tourist_spots': [],
       'restaurants': [],
       'accommodations': [],
@@ -227,7 +227,7 @@ class _ChatScreenState extends State<ChatScreen> {
     return formattedPlaces;
   }
 
-  Future<String?> _formatPlaceDetail(dynamic place, String typeId) async {
+  Future<Map<String, dynamic>?> _formatPlaceDetail(dynamic place, String typeId) async {
     try {
       final details = await getDetailData(place['contentid'], typeId);
       if (details.isNotEmpty) {
@@ -240,7 +240,13 @@ class _ChatScreenState extends State<ChatScreen> {
           case '39': hours = detail['opentimefood'] ?? '정보 없음'; restDate = detail['restdatefood'] ?? '정보 없음'; break;
           case '32': hours = '체크인: ${detail['checkintime'] ?? '-'}, 체크아웃: ${detail['checkouttime'] ?? '-'}'; restDate = '연중무휴'; break;
         }
-        return "Name: ${place['title']}, Hours: $hours, Closed: $restDate";
+        return {
+          'name': place['title'],
+          'hours': hours,
+          'restDate': restDate,
+          'mapx': place['mapx'], // Longitude
+          'mapy': place['mapy'], // Latitude
+        };
       }
     } catch (e) {
       print("장소[${place['title']}] 상세 정보 조회 실패: $e");
